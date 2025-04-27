@@ -66,21 +66,22 @@ class VAE(nn.Module):
 
         # Latent Representation Regularization
         self.n_gaussians = 10
-        self.weights = nn.Parameter(torch.zeros(self.n_gaussians))
-        self.means = nn.Parameter(torch.zeros(self.n_gaussians, 64))
-        self.logstds = nn.Parameter(torch.zeros(self.n_gaussians, 64))
-
-        self.mixing_distribution = Categorical(probs=torch.softmax(self.weights, dim=0))
-        self.component_distribution = Independent(Normal(self.means, self.logstds.exp()), 1)
-        self.gmm = MixtureSameFamily(self.mixing_distribution, self.component_distribution)
+        self.weights = nn.Parameter(torch.zeros(self.n_gaussians)).to("cuda")
+        self.means = nn.Parameter(torch.zeros(self.n_gaussians, 64)).to("cuda")
+        self.logstds = nn.Parameter(torch.zeros(self.n_gaussians, 64)).to("cuda")
 
     def forward(self, x):
         z = self.message_sender.sample(x)
         alpha, beta = self.message_receiver(z)
         return z, alpha, beta
-
+    
     def loss(self, x):
         z, alpha, beta = self.forward(x)
-        nb_nll = -NegativeBinomial(total_count=(X.sum(axis=1, keepdims=True) * alpha), logits=beta).log_prob(X).sum(axis=1)
-        latent_nll = -self.gmm.log_prob(z)
+        beta += (x.sum(axis=1, keepdims=True) / x.sum(axis=1, keepdims=True).mean()).log()
+        nb_nll = -NegativeBinomial(total_count=alpha, logits=beta).log_prob(X).sum(axis=1)
+        mixing_distribution = Categorical(probs=torch.softmax(self.weights, dim=0))
+        component_distribution = Independent(Normal(self.means, self.logstds.exp() + 1e-4), 1)
+        gmm = MixtureSameFamily(mixing_distribution, component_distribution)
+        latent_nll = -gmm.log_prob(z)
+
         return (latent_nll + nb_nll).mean()
